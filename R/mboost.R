@@ -125,6 +125,12 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
 
             ### fit baselearner(s)
             basess <- basefit(u, m)
+            
+            if (grepl("*_sh$", names(basess$model)[1])) {
+                niter <- m - 1
+                xselect <<- xselect[-length(xselect)]
+                break
+            }
 
             ### update step
             ### <FIXME> handle missing values!
@@ -378,8 +384,10 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
             } else {
                 if (inherits(ens[ix][[1]], "bm_cwlin") && !cwlin) {
                     cftmp <- sapply(ens[ix], coef, all = TRUE)
+                    cftmp <- unlist(cftmp[!sapply(cftmp, is.null)])
                 } else {
                     cftmp <- sapply(ens[ix], coef)
+                    cftmp <- unlist(cftmp[!sapply(cftmp, is.null)])
                 }
                 nr <- NROW(cftmp)
                 if (!is.matrix(cftmp)) nr <- 1
@@ -588,7 +596,7 @@ glmboost <- function(x, ...) UseMethod("glmboost", x)
 
 glmboost.formula <- function(formula, data = list(), weights = NULL,
                              na.action = na.pass, contrasts.arg = NULL,
-                             center = TRUE, control = boost_control(), ...) {
+                             center = TRUE, control = boost_control(), probe = FALSE, ...) {
 
     ## We need at least variable names to go ahead
     if (length(formula[[3]]) == 1) {
@@ -601,6 +609,16 @@ glmboost.formula <- function(formula, data = list(), weights = NULL,
 
     ### get the model frame first
     cl <- match.call()
+    
+    # create probing variables if required
+    if (probe) {
+        yname <- as.character(cl$formula[[2]])
+        shadows <- data[, !(names(data) %in% yname), drop = FALSE]
+        shadows <- sapply(shadows, sample)
+        colnames(shadows) <- paste(colnames(shadows), "sh", sep = "_")
+        data <- data.frame(data, shadows)
+    }
+    
     mf <- match.call(expand.dots = FALSE)
     m <- match(c("formula", "data", "weights", "na.action"), names(mf), 0L)
     mf <- mf[c(1L, m)]
