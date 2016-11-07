@@ -256,6 +256,7 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
 
         pfun <- function(w, agg) {
             ix <- xselect == w & indx
+            ens <- ens[1:mstop]
             if (!any(ix))
                 return(0)
             if (cwlin) w <- 1
@@ -646,10 +647,12 @@ glmboost.formula <- function(formula, data = list(), weights = NULL,
     }
     ### this function will be used for predictions later
     newX <- function(newdata) {
+        mf = model.frame(mf[, !grepl("_sh$", colnames(mf))])
         mf <- model.frame(delete.response(attr(mf, "terms")),
                           data = newdata, na.action = na.action)
         X <- model.matrix(delete.response(attr(mf, "terms")),
                           data = mf, contrasts.arg = contrasts.arg)
+        cm = cm[!grepl("_sh$", names(cm))]
         scale(X, center = cm, scale = FALSE)
     }
 

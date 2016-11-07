@@ -87,9 +87,11 @@ bolscw <- function(X) {
             })
 
             if (!is.null(newdata)) {
+                X <- X[,!grepl("_sh$", colnames(X))]
                 stopifnot(all(class(newdata) == class(X)))
                 stopifnot(all(colnames(newdata) == colnames(X)))
                 X <- newdata
+                cf <- cf[1:ncol(X)]
                 return(X %*% cf)
             }
             if (!is.null(index))
