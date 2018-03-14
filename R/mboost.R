@@ -2,7 +2,8 @@
 mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
                        offset = NULL, family = Gaussian(),
                        control = boost_control(),
-                       oobweights = as.numeric(weights == 0)) {
+                       oobweights = as.numeric(weights == 0),
+                       alpha = 0) {
 
     ### hyper parameters
     mstop <- 0
@@ -23,13 +24,13 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
     riskfct <- family@risk
 
     ### weights not specified: unweighted problem
-    if (is.null(weights)) 
+    if (is.null(weights))
         weights <- rep.int(1, NROW(response))
-    
+
     ## oobweights not specified
     if (is.null(oobweights))
         oobweights <- as.numeric(weights == 0)
-    
+
     ### handle missing responses (via zero weights)
     yna <- is.na(response)
     y <- response
@@ -47,7 +48,7 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
     ### rescale weights (because of the AIC criterion)
     ### <FIXME> is this correct with zero weights??? </FIXME>
     weights <- rescale_weights(weights)
-    
+
     if (control$risk == "oobag") {
         triskfct <- function(y, f) riskfct(y, f, oobweights)
     } else {
@@ -65,20 +66,21 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
              "i.e., combined base-learners of the form ", sQuote("bl1 %O% bl2"), " fitted via ",
              sQuote("gamboost()"), " or ", sQuote("mboost()"),
              ".\n See ", sQuote("?Multinomial"), " for details.")
-        
+
     xselect <- NULL
     ens <- vector(mode = "list", length = control$mstop)
     nuisance <- vector(mode = "list", length = control$mstop)
 
     ### initialized the boosting algorithm
     fit <- offset
+    acc <- numeric(length(bl[[1]]$Xnames))
     offsetarg <- offset
     if (is.null(offset))
         fit <- offset <- family@offset(y, weights)
     if (length(fit) == 1)
         fit <- rep(fit, NROW(y))
     u <- ustart <- ngradient(y, fit, weights)
-    
+
     ### vector of empirical risks for all boosting iterations
     ### (either in-bag or out-of-bag)
     mrisk <- triskfct(y, fit)
@@ -135,10 +137,12 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
     ### set up a function for boosting
     boost <- function(niter) {
         for (m in (mstop + 1):(mstop + niter)) {
-
             ### fit baselearner(s)
             basess <- basefit(u, m)
-
+            s = basess$model["xselect"]
+            acc[s] <<- alpha * acc[s] + environment(basess$fitted)$coef
+            environment(basess$fitted)$coef <- acc[s]
+            basess$model[1] <- acc[s]
             ### update step
             ### <FIXME> handle missing values!
             fit <<- fit + nu * basess$fitted()
@@ -174,7 +178,7 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
         mstop <<- mstop + niter
         return(TRUE)
     }
-    
+
     if (control$mstop > 0) {
         ### actually go for initial mstop iterations!
         tmp <- boost(control$mstop)
@@ -206,7 +210,8 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
             control$trace <- trace
         ### use user specified offset only (since it depends on weights otherwise)
         if (!is.null(offsetarg)) offsetarg <- offset
-        mboost_fit(blg = blg, response = response, weights = weights,
+
+       mboost_fit(blg = blg, response = response, weights = weights,
                    offset = offsetarg, family = family, control = control,
                    oobweights = oobweights)
     }
@@ -268,7 +273,7 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
                 if (!is.null(newdata))
                     return(rep(offset, NCOL(newdata)))
                 return(rep(offset, NROW(y)))
-            } 
+            }
             if (!is.null(newdata)) {
                 warning("User-specified offset is not a scalar, ",
                         "thus it cannot be used for predictions when ",
@@ -397,7 +402,7 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
     ### aggregated at all ("none")
     RET$coef <- function(which = NULL, aggregate = c("sum", "cumsum", "none")) {
 
-        if (!is.null(xselect)) 
+        if (!is.null(xselect))
             indx <- ((1:length(xselect)) <= mstop)
         which <- thiswhich(which, usedonly = is.null(which))
         if (length(which) == 0) return(NULL)
@@ -475,9 +480,9 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
 ### is evaluated as
 ###     y ~ bols3(x1) + baselearner(x2) + btree(x3)
 ### see mboost_fit for the dots
-mboost <- function(formula, data = list(), na.action = na.omit, weights = NULL, 
+mboost <- function(formula, data = list(), na.action = na.omit, weights = NULL,
                    offset = NULL, family = Gaussian(), control = boost_control(),
-                   oobweights = NULL, baselearner = c("bbs", "bols", "btree", "bss", "bns"), 
+                   oobweights = NULL, baselearner = c("bbs", "bols", "btree", "bss", "bns"),
                    ...) {
 
 
@@ -495,7 +500,7 @@ mboost <- function(formula, data = list(), na.action = na.omit, weights = NULL,
             ## drop cases with missing values in any of the specified variables:
             vars <- all.vars(formula)[all.vars(formula) %in% names(data)]
             data <- na.action(data[, vars])
-            
+
             ## check if weights need to be removed as well
             if (!is.null(weights) && nrow(data) < length(weights)) {
                 if (sum(cc) == nrow(data))
@@ -569,11 +574,11 @@ mboost <- function(formula, data = list(), na.action = na.omit, weights = NULL,
     ### get the response
     response <- eval(as.expression(formula[[2]]), envir = data,
                      enclos = environment(formula))
-    
-    ret <- mboost_fit(bl, response = response, weights = weights, 
-                      offset = offset, family = family, 
+
+    ret <- mboost_fit(bl, response = response, weights = weights,
+                      offset = offset, family = family,
                       control = control, oobweights = oobweights, ...)
-    
+
     if (is.data.frame(data) && nrow(data) == length(response))
         ret$rownames <- rownames(data)
     else
@@ -583,9 +588,9 @@ mboost <- function(formula, data = list(), na.action = na.omit, weights = NULL,
 }
 
 ### nothing to do there
-gamboost <- function(formula, data = list(), na.action = na.omit, weights = NULL, 
+gamboost <- function(formula, data = list(), na.action = na.omit, weights = NULL,
                      offset = NULL, family = Gaussian(), control = boost_control(),
-                     oobweights = NULL, baselearner = c("bbs", "bols", "btree", "bss", "bns"), 
+                     oobweights = NULL, baselearner = c("bbs", "bols", "btree", "bss", "bns"),
                      dfbase = 4, ...) {
 
     if (is.character(baselearner)) {
@@ -600,9 +605,9 @@ gamboost <- function(formula, data = list(), na.action = na.omit, weights = NULL
     stopifnot(is.function(baselearner))
     if (isTRUE(all.equal(baselearner, bbs)))
         baselearner <- function(...) bbs(as.data.frame(list(...)), df = dfbase)
-    
-    ret <- mboost(formula = formula, data = data, na.action = na.action, 
-                  weights = weights, offset = offset, family = family, 
+
+    ret <- mboost(formula = formula, data = data, na.action = na.action,
+                  weights = weights, offset = offset, family = family,
                   control = control, oobweights = oobweights,
                   baselearner = baselearner, ...)
     ret$call <- match.call()
@@ -614,7 +619,7 @@ gamboost <- function(formula, data = list(), na.action = na.omit, weights = NULL
 ### just one single tree-based baselearner
 blackboost <- function(formula, data = list(),
                        weights = NULL, na.action = na.pass,
-                       offset = NULL, family = Gaussian(), 
+                       offset = NULL, family = Gaussian(),
                        control = boost_control(),
                        oobweights = NULL,
                        tree_controls = party::ctree_control(
@@ -639,8 +644,8 @@ blackboost <- function(formula, data = list(),
     ## drop weights
     mf$"(weights)" <- NULL
     bl <- list(btree(mf, tree_controls = tree_controls))
-    ret <- mboost_fit(bl, response = response,  weights = weights, 
-                      offset = offset, family = family, 
+    ret <- mboost_fit(bl, response = response,  weights = weights,
+                      offset = offset, family = family,
                       control = control, oobweights = oobweights, ...)
     ret$call <- cl
     ret$rownames <- rownames(mf)
@@ -654,8 +659,8 @@ glmboost <- function(x, ...) UseMethod("glmboost", x)
 glmboost.formula <- function(formula, data = list(), weights = NULL,
                              offset = NULL, family = Gaussian(),
                              na.action = na.pass, contrasts.arg = NULL,
-                             center = TRUE, control = boost_control(), 
-                             oobweights = NULL, ...) {
+                             center = TRUE, control = boost_control(),
+                             oobweights = NULL, alpha = 0, ...) {
 
     ## We need at least variable names to go ahead
     if (length(formula[[3]]) == 1) {
@@ -706,9 +711,9 @@ glmboost.formula <- function(formula, data = list(), weights = NULL,
     bl <- list(bolscw(X))
     response <- model.response(mf)
     weights <- model.weights(mf)
-    ret <- mboost_fit(bl, response = response, weights = weights, 
-                      offset = offset, family = family, 
-                      control = control, oobweights = oobweights, ...)
+    ret <- mboost_fit(bl, response = response, weights = weights,
+                      offset = offset, family = family,
+                      control = control, oobweights = oobweights, alpha = alpha, ...)
     ret$newX <- newX
     ret$assign <- assign
     ret$center <- cm
@@ -765,7 +770,7 @@ glmboost.formula <- function(formula, data = list(), weights = NULL,
 
 glmboost.matrix <- function(x, y, center = TRUE, weights = NULL,
                             offset = NULL, family = Gaussian(),
-                            na.action = na.pass, control = boost_control(), 
+                            na.action = na.pass, control = boost_control(),
                             oobweights = NULL, ...) {
 
     X <- x
@@ -818,8 +823,8 @@ glmboost.matrix <- function(x, y, center = TRUE, weights = NULL,
         return(NULL)
     }
     bl <- list(bolscw(X))
-    ret <- mboost_fit(bl, response = y, weights = weights, 
-                      offset = offset, family = family, 
+    ret <- mboost_fit(bl, response = y, weights = weights,
+                      offset = offset, family = family,
                       control = control, oobweights = oobweights, ...)
     ret$newX <- newX
     ret$assign <- assign
