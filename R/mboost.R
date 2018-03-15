@@ -140,7 +140,8 @@ mboost_fit <- function(blg, response, weights = rep(1, NROW(response)),
             ### fit baselearner(s)
             basess <- basefit(u, m)
             s = basess$model["xselect"]
-            acc[s] <<- alpha * acc[s] + environment(basess$fitted)$coef
+            acc <<- alpha * acc
+            acc[s] <<- acc[s] + environment(basess$fitted)$coef
             environment(basess$fitted)$coef <- acc[s]
             basess$model[1] <- acc[s]
             ### update step
